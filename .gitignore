@@ -1,7 +1,4 @@
 node_modules/
 web/dist/
 recordings/
-.cache/
 .direnv/
-auto.key
-auto.crt

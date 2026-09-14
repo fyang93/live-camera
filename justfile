@@ -115,7 +115,6 @@ live ip="127.0.0.1" segment_hours="2" codec="h265": stop check
     srt: false
     moq: false
 
-    # No automatic disk-backed cache. The player starts FFmpeg only on Record.
     hls: false
 
     webrtc: true
