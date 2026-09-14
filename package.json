@@ -1,0 +1,16 @@
+{
+  "name": "live-camera",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build web/app.ts --outdir web/dist --target browser --minify",
+    "typecheck": "tsc --noEmit",
+    "start": "bun run build && bun web/server.ts",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.0",
+    "playwright-core": "^1.63.0",
+    "typescript": "^5.9.3"
+  }
+}
