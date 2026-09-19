@@ -121,7 +121,6 @@ live ip="127.0.0.1" segment_hours="2" codec="h265": stop check
     webrtcAddress: 127.0.0.1:8889
     webrtcLocalUDPAddress: :8189
     webrtcLocalTCPAddress: :8189
-    webrtcIPsFromInterfaces: false
     webrtcAdditionalHosts:
       - {{ip}}
 
