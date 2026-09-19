@@ -22,8 +22,11 @@ const preview = element<HTMLElement>('.seek-preview');
 let pc: RTCPeerConnection | null = null, session: string | null = null;
 let generation = 0, recording: Recording | null = null, dragging = false, gestureNeeded = false;
 let snapshot: RecordingList = { active: null, recordings: [], maxSegmentSeconds: 7200 };
-let pending = false, polling = false;
+let pending = false, polling = false, reconnectAttempt = 0, reconnectPending = false;
 let hideTimer: ReturnType<typeof setTimeout>;
+let disconnectTimer: ReturnType<typeof setTimeout> | undefined;
+let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+let statsTimer: ReturnType<typeof setInterval> | undefined;
 let pointer: number | null = null, savedValue = '0';
 let releaseTimer: ReturnType<typeof setTimeout>;
 const clock = (seconds: number): string => new Date(seconds * 1000).toLocaleString('zh-CN', {
@@ -43,8 +46,12 @@ function fail(error: unknown): void {
   status.textContent = error instanceof Error ? error.message : String(error);
   retry.hidden = false; reveal();
 }
+function clearConnectionTimers(): void {
+  clearTimeout(disconnectTimer); clearTimeout(reconnectTimer); clearInterval(statsTimer);
+  disconnectTimer = reconnectTimer = statsTimer = undefined;
+}
 function dispose(): number {
-  generation++;
+  generation++; reconnectPending = false; clearConnectionTimers();
   pc?.close(); pc = null;
   if (session) void fetch(session, { method: 'DELETE', keepalive: true }).catch(() => {});
   session = null; gestureNeeded = false;
@@ -56,7 +63,40 @@ async function play(): Promise<void> {
   try { await video.play(); gestureNeeded = false; retry.hidden = true; }
   catch { gestureNeeded = true; retry.hidden = false; retry.textContent = '点击播放'; reveal(); }
 }
-async function live(): Promise<void> {
+function scheduleReconnect(id: number, message: string): void {
+  if (generation !== id || recording || reconnectTimer) return;
+  reconnectPending = true;
+  clearTimeout(disconnectTimer); clearInterval(statsTimer);
+  disconnectTimer = statsTimer = undefined;
+  retry.textContent = '立即重连'; retry.hidden = false; reveal();
+  if (!navigator.onLine || document.hidden) {
+    status.textContent = `${message}，等待网络恢复…`;
+    return;
+  }
+  const delay = Math.min(1000 * 2 ** reconnectAttempt++, 15000);
+  status.textContent = `${message}，${Math.ceil(delay / 1000)} 秒后自动重连…`;
+  reconnectTimer = setTimeout(() => { reconnectTimer = undefined; void live(true); }, delay);
+}
+function watchStream(peer: RTCPeerConnection, id: number): void {
+  clearInterval(statsTimer);
+  let previousBytes: number | undefined, stalled = 0, checking = false;
+  statsTimer = setInterval(async () => {
+    if (checking || document.hidden || generation !== id || peer.connectionState !== 'connected') return;
+    checking = true;
+    try {
+      let bytes = 0;
+      (await peer.getStats()).forEach(report => {
+        if (report.type === 'inbound-rtp' && report.kind === 'video' && !report.isRemote) bytes += Number(report.bytesReceived || 0);
+      });
+      stalled = previousBytes !== undefined && bytes <= previousBytes ? stalled + 1 : 0;
+      previousBytes = bytes;
+      if (stalled >= 3) scheduleReconnect(id, '直播画面已停止');
+    } catch { /* A connection-state event will handle a closed peer. */ }
+    finally { checking = false; }
+  }, 5000);
+}
+async function live(automatic = false): Promise<void> {
+  if (!automatic) reconnectAttempt = 0;
   const id = dispose(); recording = null;
   player.dataset.mode = 'live'; scrubber.hidden = true; timeline.disabled = true;
   element<HTMLButtonElement>('#choose-time').disabled = true;
@@ -66,10 +106,23 @@ async function live(): Promise<void> {
     peer.addTransceiver('video', { direction: 'recvonly' });
     peer.ontrack = event => {
       if (generation !== id) return;
-      video.srcObject = new MediaStream([event.track]); void play(); status.textContent = '';
+      video.srcObject = new MediaStream([event.track]); void play();
     };
     peer.onconnectionstatechange = () => {
-      if (generation === id && ['failed', 'disconnected'].includes(peer.connectionState)) fail(new Error('直播连接中断，请重连'));
+      if (generation !== id) return;
+      if (peer.connectionState === 'connected') {
+        clearTimeout(disconnectTimer); clearTimeout(reconnectTimer);
+        disconnectTimer = reconnectTimer = undefined; reconnectPending = false; reconnectAttempt = 0;
+        status.textContent = ''; if (!gestureNeeded) retry.hidden = true;
+        watchStream(peer, id);
+      } else if (peer.connectionState === 'disconnected') {
+        clearInterval(statsTimer); statsTimer = undefined;
+        status.textContent = '网络波动，正在尝试恢复…'; retry.hidden = true; reveal();
+        clearTimeout(disconnectTimer);
+        disconnectTimer = setTimeout(() => scheduleReconnect(id, '直播连接中断'), 8000);
+      } else if (peer.connectionState === 'failed' || peer.connectionState === 'closed') {
+        scheduleReconnect(id, '直播连接中断');
+      }
     };
     await peer.setLocalDescription(await peer.createOffer());
     await new Promise<void>((resolve, reject) => {
@@ -86,7 +139,9 @@ async function live(): Promise<void> {
     const location = response.headers.get('Location');
     if (id !== generation) { if (location) void fetch(location, { method: 'DELETE' }).catch(() => {}); return; }
     session = location; await peer.setRemoteDescription({ type: 'answer', sdp: await response.text() });
-  } catch (error) { if (generation === id) fail(error); }
+  } catch (error) {
+    if (generation === id) scheduleReconnect(id, error instanceof Error ? error.message : String(error));
+  }
 }
 function replay(item: Recording): void {
   dispose(); recording = item; player.dataset.mode = 'history';
@@ -273,5 +328,9 @@ for (const event of ['pointermove', 'pointerdown', 'focusin', 'keydown']) player
 video.addEventListener('click', reveal); video.addEventListener('playing', reveal); video.addEventListener('pause', reveal);
 window.addEventListener('pagehide', () => { dispose(); }); // Recording belongs to the server, not this tab.
 window.addEventListener('pageshow', event => { if (event.persisted) void live(); });
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && !recording && (reconnectPending || !pc || ['disconnected', 'failed', 'closed'].includes(pc.connectionState))) void live(true);
+});
+window.addEventListener('online', () => { if (!recording && (reconnectPending || pc?.connectionState !== 'connected')) void live(true); });
 void live(); void pollRecordings(); setInterval(() => { void pollRecordings(); }, 3000);
 syncPause(); reveal();

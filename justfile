@@ -100,7 +100,7 @@ live ip="127.0.0.1" segment_hours="2" codec="h265": stop check
     trap 'rm -rf "$TMPDIR"' EXIT
 
     echo "Player: http://{{ip}}:8080/"
-    echo "Live: H.264 / 1080p / 30 fps; manual recording: {{codec}} / 1080p / 20 fps"
+    echo "Live: H.264 / 1080p / 20 fps; manual recording: {{codec}} / 1080p / 20 fps"
     echo "Recording is OFF. Enable it in the player; files roll every ${HOURS} hours."
     echo "Saved recordings: $PWD/recordings/"
     echo
@@ -120,6 +120,8 @@ live ip="127.0.0.1" segment_hours="2" codec="h265": stop check
     webrtc: true
     webrtcAddress: 127.0.0.1:8889
     webrtcLocalUDPAddress: :8189
+    webrtcLocalTCPAddress: :8189
+    webrtcIPsFromInterfaces: false
     webrtcAdditionalHosts:
       - {{ip}}
 
